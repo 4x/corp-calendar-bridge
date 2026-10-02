@@ -1,0 +1,18 @@
+# Corporate exports belong only in the explicitly approved private data repo.
+exports/
+*.snapshot.json
+
+# Personal credentials and runtime files
+secrets/
+config.json
+client_secret*.json
+token*.json
+.bridge.lock
+
+# Local coding-agent metadata
+.freebuff/
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+.venv/

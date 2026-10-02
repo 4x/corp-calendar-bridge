@@ -1,0 +1,15 @@
+{
+  "github_repository": "YOUR-USER/YOUR-PRIVATE-DATA-REPO",
+  "github_branch": "main",
+  "employer_approved": false,
+  "calendar_name": "Work overview",
+  "calendar_timezone": "Etc/UTC",
+  "calendar_id": "",
+  "client_secret_file": "secrets/client_secret.json",
+  "token_file": "secrets/token.json",
+  "max_snapshot_age_hours": 48,
+  "sources": [
+    { "id": "client-a", "prefix": "[A] " },
+    { "id": "client-b", "prefix": "[B] " }
+  ]
+}
