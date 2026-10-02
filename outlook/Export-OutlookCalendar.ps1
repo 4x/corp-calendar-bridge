@@ -27,15 +27,106 @@ function Hash-Text([string]$Text) {
     try { return ([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($Text)))).Replace('-', '').ToLowerInvariant() }
     finally { $sha.Dispose() }
 }
+function Get-EnvValue([string]$Name) {
+    $value = [Environment]::GetEnvironmentVariable($Name)
+    if ([string]::IsNullOrEmpty($value)) { return $null }
+    return $value
+}
+function Test-Elevated {
+    try {
+        $principal = [Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())
+        return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    } catch { return $false }
+}
+function Get-OutlookExecutable {
+    $candidates = [Collections.Generic.List[string]]::new()
+    foreach ($root in @('ProgramFiles', 'ProgramFiles(x86)')) {
+        $base = Get-EnvValue $root
+        if (-not $base) { continue }
+        foreach ($relative in @('Microsoft Office\root\Office16\OUTLOOK.EXE', 'Microsoft Office\Office16\OUTLOOK.EXE', 'Microsoft Office\root\Office15\OUTLOOK.EXE')) {
+            $candidates.Add((Join-Path $base $relative))
+        }
+    }
+    foreach ($candidate in $candidates) {
+        if (Test-Path -LiteralPath $candidate) { return $candidate }
+    }
+    return $null
+}
+function Get-ComErrorDetail($ErrorRecord) {
+    $messages = [Collections.Generic.List[string]]::new()
+    $exception = $ErrorRecord.Exception
+    while ($null -ne $exception) {
+        $message = (([string]$exception.Message) -replace '\s+', ' ').Trim()
+        if ($message) {
+            if ($message.Length -gt 200) { $message = $message.Substring(0, 200) + '...' }
+            $messages.Add($message)
+        }
+        $exception = $exception.InnerException
+    }
+    $detail = 'HRESULT {0}' -f ('0x{0:X8}' -f $ErrorRecord.Exception.HResult)
+    if ($messages.Count) { return $detail + ': ' + ($messages -join ' | ') }
+    return $detail
+}
+function Get-ComRemediation([int]$HResult) {
+    $tips = [Collections.Generic.List[string]]::new()
+    if ($HResult -eq -2147024891) {
+        $tips.Add('Access denied (0x80070005): Outlook and PowerShell are usually running at different privilege levels. Close Outlook completely, then open PowerShell the same way you open Outlook - normally both non-elevated. Running Outlook as administrator while PowerShell is not (or the reverse) causes this.')
+    } elseif ($HResult -eq -2146822884) {
+        $tips.Add('Generic Outlook error (0x800A03EC): finish any first-run/profile dialogs, make sure the calendar opens normally in Outlook, and check that File > Options > General does not have "Always use New Outlook" enabled.')
+    }
+    $tips.Add('Bitness must match Outlook: use C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe (64-bit) for 64-bit Outlook, or C:\Windows\SysWOW64\WindowsPowerShell\v1.0\powershell.exe (32-bit) for 32-bit Outlook. The report above lists both.')
+    $tips.Add('Close any lingering Outlook dialog or add-in prompt that blocks automation, then retry.')
+    $tips.Add('If company policy blocks Outlook COM automation, ask IT for an approved alternative. Do not weaken security settings to force it.')
+    return $tips
+}
 
 if ($Diagnose) {
+    Write-Output 'Classic Outlook automation report'
+    Write-Output '=================================='
     $classic = $null -ne (Get-Item 'Registry::HKEY_CLASSES_ROOT\Outlook.Application' -ErrorAction SilentlyContinue)
-    $new = @(Get-Process -Name 'olk' -ErrorAction SilentlyContinue).Length -gt 0
+    $newOutlook = @(Get-Process -Name 'olk' -ErrorAction SilentlyContinue).Length -gt 0
+    $runningOutlook = @(Get-Process -Name 'OUTLOOK' -ErrorAction SilentlyContinue).Length -gt 0
+    $powerShellBits = if ([IntPtr]::Size -eq 8) { '64-bit' } else { '32-bit' }
+    $outlookExe = Get-OutlookExecutable
+    $outlookBits = 'not found'
+    if ($null -ne $outlookExe) {
+        $x86Root = Get-EnvValue 'ProgramFiles(x86)'
+        if ($x86Root -and $outlookExe.StartsWith($x86Root, [StringComparison]::OrdinalIgnoreCase)) { $outlookBits = '32-bit' }
+        elseif ($null -ne (Get-EnvValue 'ProgramFiles')) { $outlookBits = '64-bit' }
+    }
     Write-Output "Classic Outlook automation registered: $classic"
-    Write-Output "New Outlook currently running (olk.exe): $new"
+    Write-Output "New Outlook currently running (olk.exe): $newOutlook"
+    Write-Output "Classic Outlook currently running: $runningOutlook"
+    Write-Output "PowerShell: $powerShellBits"
+    Write-Output "OUTLOOK.EXE: $outlookBits"
+    if ($null -ne $outlookExe) { Write-Output "Outlook path: $outlookExe" }
+    Write-Output "PowerShell elevated: $(Test-Elevated)"
+    if ($powerShellBits -ne $outlookBits -and $outlookBits -ne 'not found') { Write-Output 'WARNING: PowerShell and Outlook bitness differ. This alone prevents COM automation.' }
     Write-Output 'OUTLOOK.EXE / File > Office Account means classic Outlook. olk.exe or no File menu usually means new Outlook.'
-    Write-Output 'Registration alone does not prove your account is configured in classic Outlook. Open it, confirm the calendar, then run -ListCalendars.'
-    Write-Output 'Browser-only/new Outlook is not supported by this exporter; ask IT about an approved Microsoft Graph integration.'
+    $comApp = $null
+    $probeSession = $null
+    $probeStores = $null
+    try {
+        $comApp = New-Object -ComObject Outlook.Application
+        Write-Output 'COM automation: AVAILABLE'
+        try {
+            $probeSession = $comApp.GetNamespace('MAPI')
+            $probeStores = $probeSession.Stores
+            Write-Output "Calendar stores visible: $($probeStores.Count)"
+            Write-Output 'Run -ListCalendars to see store names locally, then export with -StoreDisplayName.'
+        } catch {
+            Write-Output 'Outlook started, but the MAPI namespace could not be read. The profile may be unavailable for this session.'
+        }
+    } catch {
+        $hresult = 0
+        try { $hresult = $_.Exception.HResult } catch { $hresult = 0 }
+        Write-Output 'COM automation: UNAVAILABLE'
+        Write-Output "Detail: $(Get-ComErrorDetail $_)"
+        foreach ($tip in (Get-ComRemediation -HResult $hresult)) { Write-Output "  - $tip" }
+    } finally {
+        foreach ($object in @($probeStores, $probeSession, $comApp)) { Release-Com $object }
+    }
+    Write-Output 'Note: this report can contain your Windows account name. Redact it before sharing.'
     return
 }
 
@@ -43,7 +134,10 @@ $app = $session = $stores = $store = $folder = $items = $restricted = $item = $n
 $temp = $null
 try {
     try { $app = New-Object -ComObject Outlook.Application }
-    catch { throw 'Classic Outlook automation is unavailable. Run -Diagnose and consult IT; this script cannot automate new Outlook or bypass company restrictions.' }
+    catch {
+        $code = '0x{0:X8}' -f $_.Exception.HResult
+        throw "Classic Outlook automation is unavailable (HRESULT $code). Run -Diagnose for bitness, elevation, and remediation guidance. This script cannot automate new Outlook or bypass company restrictions."
+    }
     $session = $app.GetNamespace('MAPI')
     if ($ListCalendars) {
         $stores = $session.Stores

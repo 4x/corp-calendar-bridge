@@ -35,7 +35,19 @@ Download/copy the `outlook` scripts using an employer-approved method. In **Wind
 .\outlook\Export-OutlookCalendar.ps1 -Diagnose
 ```
 
-This checks classic COM registration and whether new Outlook is running. Both can be installed simultaneously, so registration alone is not proof that your account is configured in classic Outlook.
+This reports classic COM registration, new Outlook detection, PowerShell and Outlook bitness, whether PowerShell is elevated, and whether COM automation actually starts. It also surfaces the underlying HRESULT and remediation steps when automation fails.
+
+If COM automation reports `UNAVAILABLE`, the usual causes are:
+
+- **Bitness mismatch.** PowerShell and Outlook must match: use `C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe` for 64-bit Outlook, or `C:\Windows\SysWOW64\WindowsPowerShell\v1.0\powershell.exe` for 32-bit Outlook. The report lists both.
+- **Privilege mismatch.** If Outlook runs elevated and PowerShell does not (or the reverse), COM fails with access denied. Close Outlook fully and open PowerShell the same way you open Outlook—normally both without elevation.
+- **A blocking dialog.** Finish any first-run, profile, or add-in prompt so the calendar opens normally.
+- **New Outlook enabled.** Check `File > Options > General` for `Always use New Outlook`.
+- **Company policy.** If policy blocks Outlook automation, ask IT for an approved alternative rather than weakening security settings.
+
+Both Outlook versions can be installed simultaneously, so registration alone is not proof that your account is configured in classic Outlook.
+
+The report can contain your Windows account name; redact it before sharing it.
 
 If classic Outlook is available, open it, wait until the calendar is up to date, then run:
 
@@ -174,7 +186,7 @@ You can also use Apple Calendar with your personal Google account; ensure the ne
 
 | Symptom | Action |
 | --- | --- |
-| Classic automation unavailable | Run `-Diagnose`; confirm classic Outlook and the account's profile. New Outlook/web needs another approved integration. |
+| Classic automation unavailable | Run `-Diagnose` and read the reported HRESULT. Match PowerShell bitness to Outlook, and run both at the same privilege level. New Outlook/web needs another approved integration. |
 | Script execution blocked | Ask IT to approve/sign the script; do not bypass policy. |
 | Wrong or empty source calendar | Inspect Outlook, use `-ListCalendars`, specify the intended `-StoreDisplayName`; do not override deletion guards blindly. |
 | GitHub HTTP 403/404 | Check token expiry, selected repository, Contents permissions, and branch. Missing/unauthorized sources stop the import. |
@@ -195,6 +207,7 @@ On Windows with PowerShell 5.1, run the mocked exporter and publisher tests (no 
 ```powershell
 .\tests\Test-OutlookExport.ps1
 .\tests\Test-SnapshotPublish.ps1
+.\tests\Test-OutlookDiagnose.ps1
 ```
 
 Automated tests exercise privacy allowlists, validation, repeated syncs, changes, source isolation, deletion safety, write recovery, exporter behavior using fake Outlook objects, and publisher safeguards using fake GitHub responses. They do **not** prove that a particular employer's Outlook profile, locale, recurrence cache, security settings, GitHub permissions, or Google account works. Perform an approved manual pilot with a timed event, a recurrence with an edited/deleted occurrence, an all-day event, a sensitivity-marked event, a reschedule, and a deletion before relying on the overview.
